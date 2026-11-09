@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Red Ball</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+  body{margin:0;overflow:hidden;background:#111;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;color:#fff;touch-action:none}
+  canvas{border:2px solid #444;border-radius:8px;box-shadow:0 0 30px #f00a;max-width:100%;max-height:100%}
+  #hud{position:fixed;top:10px;left:10px;font-size:18px;text-shadow:0 0 8px #000;z-index:10}
+  #controls{position:fixed;bottom:20px;left:0;right:0;display:none;justify-content:space-between;padding:0 20px;z-index:10;pointer-events:none}
+  .btn{
+    pointer-events:auto;
+    width:80px;height:80px;border-radius:50%;
+    background:rgba(255,255,255,0.15);
+    border:3px solid rgba(255,255,255,0.4);
+    color:#fff;font-size:36px;font-weight:bold;
+    display:flex;justify-content:center;align-items:center;
+    backdrop-filter:blur(5px);
+    transition:background 0.1s, transform 0.1s;
+  }
+  .btn:active{background:rgba(255,80,80,0.6);transform:scale(0.92)}
+  .left-group{display:flex;gap:15px}
+  @media (pointer:coarse){#controls{display:flex}}
+</style>
+</head>
+<body>
+<div id="hud">Монеты: <span id="coins">0</span> | Жизни: <span id="lives">3</span></div>
+<canvas id="c" width="900" height="500"></canvas>
+
+<div id="controls">
+  <div class="left-group">
+    <div class="btn" id="btnLeft">◀</div>
+    <div class="btn" id="btnRight">▶</div>
+  </div>
+  <div class="btn" id="btnJump">⬆</div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const keys = {};
+addEventListener('keydown', e => { keys[e.code] = true; if(e.code==='Space') e.preventDefault(); });
+addEventListener('keyup', e => keys[e.code] = false);
+
+// --- Экранные кнопки для телефона ---
+function bindHold(el, key) {
+  const start = e => { e.preventDefault(); keys[key] = true; };
+  const end   = e => { e.preventDefault(); keys[key] = false; };
+  el.addEventListener('touchstart', start, {passive:false});
+  el.addEventListener('touchend', end, {passive:false});
+  el.addEventListener('touchcancel', end, {passive:false});
+  el.addEventListener('mousedown', start);
+  el.addEventListener('mouseup', end);
+  el.addEventListener('mouseleave', end);
+}
+bindHold(document.getElementById('btnLeft'), 'ArrowLeft');
+bindHold(document.getElementById('btnRight'), 'ArrowRight');
+bindHold(document.getElementById('btnJump'), 'Space');
+
+let coinsCollected = 0, lives = 3;
+
+const gravity = 0.6;
+const friction = 0.85;
+
+const player = {
+  x: 80, y: 100, r: 15,
+  vx: 0, vy: 0,
+  onGround: false,
+  spawnX: 80, spawnY: 100
+};
+
+const platforms = [
+  {x:0, y:470, w:900, h:30},
+  {x:200, y:400, w:120, h:20},
+  {x:380, y:340, w:120, h:20},
+  {x:560, y:280, w:120, h:20},
+  {x:740, y:220, w:120, h:20},
+  {x:300, y:220, w:100, h:20},
+  {x:100, y:300, w:100, h:20},
+  {x:600, y:400, w:150, h:20},
+];
+
+let coins = [
+  {x:250, y:370, r:10, taken:false},
+  {x:430, y:310, r:10, taken:false},
+  {x:610, y:250, r:10, taken:false},
+  {x:790, y:190, r:10, taken:false},
+  {x:340, y:190, r:10, taken:false},
+  {x:140, y:270, r:10, taken:false},
+  {x:660, y:370, r:10, taken:false},
+];
+
+const spikes = [
+  {x:450, y:450, w:80, h:20},
+  {x:700, y:450, w:100, h:20},
+  {x:330, y:320, w:50, h:20},
+  {x:760, y:200, w:80, h:20},
+];
+
+const goal = {x:840, y:170, w:40, h:50};
+
+let cameraX = 0;
+
+function resetPlayer() {
+  player.x = player.spawnX;
+  player.y = player.spawnY;
+  player.vx = 0; player.vy = 0;
+}
+
+function rectCircleCollide(rx, ry, rw, rh, cx, cy, cr) {
+  const nx = Math.max(rx, Math.min(cx, rx + rw));
+  const ny = Math.max(ry, Math.min(cy, ry + rh));
+  const dx = cx - nx, dy = cy - ny;
+  return dx*dx + dy*dy < cr*cr;
+}
+
+function update() {
+  const speed = 0.8;
+  if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= speed;
+  if (keys['ArrowRight'] || keys['KeyD']) player.vx += speed;
+  if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
+    player.vy = -12;
+    player.onGround = false;
+  }
+
+  player.vx *= friction;
+  player.vy += gravity;
+
+  player.x += player.vx;
+  player.y += player.vy;
+
+  player.onGround = false;
+  for (const p of platforms) {
+    if (player.x + player.r > p.x && player.x - player.r < p.x + p.w) {
+      if (player.vy >= 0 && player.y + player.r > p.y && player.y + player.r < p.y + p.h + Math.abs(player.vy) + 2) {
+        player.y = p.y - player.r;
+        player.vy = 0;
+        player.onGround = true;
+      } else if (player.vy < 0 && player.y - player.r < p.y + p.h && player.y - player.r > p.y - 2) {
+        player.y = p.y + p.h + player.r;
+        player.vy = 0;
+      }
+    }
+    if (player.y + player.r > p.y && player.y - player.r < p.y + p.h) {
+      if (player.vx > 0 && player.x + player.r > p.x && player.x < p.x) {
+        player.x = p.x - player.r;
+        player.vx = 0;
+      } else if (player.vx < 0 && player.x - player.r < p.x + p.w && player.x > p.x + p.w) {
+        player.x = p.x + p.w + player.r;
+        player.vx = 0;
+      }
+    }
+  }
+
+  if (player.x - player.r < 0) { player.x = player.r; player.vx = 0; }
+  if (player.x + player.r > W) { player.x = W - player.r; player.vx = 0; }
+  if (player.y > H + 200) {
+    lives--; updateHUD();
+    if (lives <= 0) { alert('Игра окончена! Монет собрано: ' + coinsCollected); location.reload(); }
+    resetPlayer();
+  }
+
+  for (const c of coins) {
+    if (!c.taken) {
+      const dx = player.x - c.x, dy = player.y - c.y;
+      if (dx*dx + dy*dy < (player.r + c.r)**2) {
+        c.taken = true;
+        coinsCollected++;
+        updateHUD();
+      }
+    }
+  }
+
+  for (const s of spikes) {
+    if (rectCircleCollide(s.x, s.y, s.w, s.h, player.x, player.y, player.r)) {
+      lives--; updateHUD();
+      if (lives <= 0) { alert('Игра окончена! Монет собрано: ' + coinsCollected); location.reload(); }
+      resetPlayer();
+      break;
+    }
+  }
+
+  if (rectCircleCollide(goal.x, goal.y, goal.w, goal.h, player.x, player.y, player.r)) {
+    alert('Победа! Монет собрано: ' + coinsCollected + ' из ' + coins.length);
+    location.reload();
+  }
+
+  const target = Math.max(0, Math.min(W - W, player.x - W/2));
+  cameraX += (target - cameraX) * 0.08;
+}
+
+function updateHUD() {
+  document.getElementById('coins').textContent = coinsCollected;
+  document.getElementById('lives').textContent = lives;
+}
+
+function draw() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#1a1a2e');
+  grad.addColorStop(1, '#16213e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#ffffff33';
+  for (let i = 0; i < 50; i++) {
+    const x = (i * 137) % W;
+    const y = (i * 89) % (H * 0.7);
+    ctx.fillRect(x, y, 2, 2);
+  }
+
+  ctx.save();
+  ctx.translate(-cameraX, 0);
+
+  for (const p of platforms) {
+    const g = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.h);
+    g.addColorStop(0, '#4a4a6a');
+    g.addColorStop(1, '#2a2a4a');
+    ctx.fillStyle = g;
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.strokeStyle = '#6a6a9a';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, p.y, p.w, p.h);
+  }
+
+  for (const s of spikes) {
+    ctx.fillStyle = '#ff3333';
+    for (let i = 0; i < s.w; i += 16) {
+      ctx.beginPath();
+      ctx.moveTo(s.x + i, s.y + s.h);
+      ctx.lineTo(s.x + i + 8, s.y);
+      ctx.lineTo(s.x + i + 16, s.y + s.h);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = '#8a0000';
+    ctx.fillRect(s.x, s.y + s.h - 4, s.w, 4);
+  }
+
+  for (const c of coins) {
+    if (c.taken) continue;
+    const t = Date.now() / 200;
+    ctx.save();
+    ctx.translate(c.x, c.y + Math.sin(t + c.x) * 2);
+    const g = ctx.createRadialGradient(0, 0, 2, 0, 0, c.r);
+    g.addColorStop(0, '#fff9a0');
+    g.addColorStop(1, '#ffaa00');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, c.r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = '#ff8800';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.fillStyle = '#00ff88';
+  ctx.fillRect(goal.x, goal.y, goal.w, goal.h);
+  ctx.fillStyle = '#004422';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('GOAL', goal.x + goal.w/2, goal.y + goal.h/2 + 5);
+
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  const pg = ctx.createRadialGradient(-5, -5, 2, 0, 0, player.r);
+  pg.addColorStop(0, '#ff6666');
+  pg.addColorStop(1, '#cc0000');
+  ctx.fillStyle = pg;
+  ctx.beginPath();
+  ctx.arc(0, 0, player.r, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = '#880000';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(4, -4, 5, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(6, -4, 2.5, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.restore();
+
+  if (player.y > H) {
+    ctx.fillStyle = '#fff';
+    ctx.font = '30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Упал!', W/2, H/2);
+  }
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+updateHUD();
+loop();
+</script>
+</body>
+</html>
